@@ -38,7 +38,6 @@ Mappings:
       AMIs: ami-08569b978cc4dfa10
 
 
-#In Resources Section we are gonna defice EC2 instance that will be work as an Applicaion Server
 Resources:
     
   MyWebServerInstance:
@@ -46,7 +45,7 @@ Resources:
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
-          # List the configSets and the config keys they contain:
+
           Install:
             - "installHttpd"
             - "installDatadogAgent"
@@ -56,7 +55,7 @@ Resources:
             - "configureLogs"
           Restart:
             - "restart"
-        # Config key: installHttpd
+       
         installHttpd:
           packages:
             yum:
@@ -66,28 +65,26 @@ Resources:
               httpd:
                 enabled: true
                 ensureRunning: true
-        # Config key: installDatadogAgent
+     
         installDatadogAgent:
           commands:
             01_download_and_install:
               env:
                 DD_API_KEY: !Sub "${APIKey}"
               command: "bash -c \"$(curl -L https://raw.githubusercontent.com/DataDog/datadog-agent/master/cmd/agent/install_script.sh)\""
-        # Config key: configureModStatus
+    
         configureModStatus:
           commands:
             01_add_config:
               command:
                 !Sub |
                   cat <<EOT > /etc/httpd/conf.d/server-status.conf
-                  # Enable the /server-status page
                   ExtendedStatus on
                   <Location /server-status>
                   SetHandler server-status
                   Allow from localhost
                   </Location>
                   EOT
-        # Config key: enableLogs
         enableLogs:
           commands:
             01_update_datadog_yaml:
@@ -98,7 +95,7 @@ Resources:
             03_sed_logrorate:
               cwd: /etc/logrotate.d
               command: "sed -i 's#/bin/systemctl reload httpd.service > /dev/null 2>/dev/null || true#/bin/systemctl reload httpd.service > /dev/null 2>/dev/null || true; setfacl -m u:dd-agent:rx /var/log/httpd#' httpd"
-        # Config key: configureLogs
+        
         configureLogs:
           commands:
             01_create_apache_conf_yaml:
