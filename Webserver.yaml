@@ -1,0 +1,161 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: EC2 Instance For Application Sever
+
+Parameters:
+
+  APIKey:
+    Description: "The API key for your Datadog account"
+    Type: String
+
+  KeyName: 
+    Description: Name of an existing EC2 key pair for SSH access to the EC2 instance
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: aamirKP1
+    ConstraintDescription: must be the name of an existing EC2 KeyPair
+
+    
+  InstaceTypeParam:
+    Type: String
+    Default: t2.micro
+    AllowedValues: 
+      - t2.micro
+      - m3.medium
+      - m3.large
+      - c3.large
+      - c3.xlarge
+    ConstraintDescription: Must be one of them
+Mappings:
+  EC2RegionMapping:
+    us-east-1:
+      AMIs: ami-0ff8a91507f77f867
+    us-west-1:
+      AMIs: ami-0bdb828fd58c52235
+    eu-west-1:
+      AMIs: ami-047bb4163c506cd98
+    ap-northeast-1:
+      AMIs: ami-06cd52961ce9f0d85
+    ap-southeast-1:
+      AMIs: ami-08569b978cc4dfa10
+
+
+#In Resources Section we are gonna defice EC2 instance that will be work as an Applicaion Server
+Resources:
+    
+  MyWebServerInstance:
+    Type: "AWS::EC2::Instance"
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          # List the configSets and the config keys they contain:
+          Install:
+            - "installHttpd"
+            - "installDatadogAgent"
+          Configure:
+            - "configureModStatus"
+            - "enableLogs"
+            - "configureLogs"
+          Restart:
+            - "restart"
+        # Config key: installHttpd
+        installHttpd:
+          packages:
+            yum:
+              httpd: []
+          services:
+            sysvinit:
+              httpd:
+                enabled: true
+                ensureRunning: true
+        # Config key: installDatadogAgent
+        installDatadogAgent:
+          commands:
+            01_download_and_install:
+              env:
+                DD_API_KEY: !Sub "${APIKey}"
+              command: "bash -c \"$(curl -L https://raw.githubusercontent.com/DataDog/datadog-agent/master/cmd/agent/install_script.sh)\""
+        # Config key: configureModStatus
+        configureModStatus:
+          commands:
+            01_add_config:
+              command:
+                !Sub |
+                  cat <<EOT > /etc/httpd/conf.d/server-status.conf
+                  # Enable the /server-status page
+                  ExtendedStatus on
+                  <Location /server-status>
+                  SetHandler server-status
+                  Allow from localhost
+                  </Location>
+                  EOT
+        # Config key: enableLogs
+        enableLogs:
+          commands:
+            01_update_datadog_yaml:
+              cwd: "/etc/datadog-agent/"
+              command: "sed -i 's/^# logs_enabled: false$/logs_enabled: true/' datadog.yaml"
+            02_fix_logfile_permissions:
+              command: "setfacl -m u:dd-agent:rx /var/log/httpd"
+            03_sed_logrorate:
+              cwd: /etc/logrotate.d
+              command: "sed -i 's#/bin/systemctl reload httpd.service > /dev/null 2>/dev/null || true#/bin/systemctl reload httpd.service > /dev/null 2>/dev/null || true; setfacl -m u:dd-agent:rx /var/log/httpd#' httpd"
+        # Config key: configureLogs
+        configureLogs:
+          commands:
+            01_create_apache_conf_yaml:
+              cwd: "/etc/datadog-agent/conf.d/apache.d/"
+              command:
+                cp conf.yaml.example conf.yaml
+            02_update_apache_conf_yaml:
+              cwd: "/etc/datadog-agent/conf.d/apache.d/"
+              command:
+                !Sub |
+                  cat <<EOT >> conf.yaml
+                  logs:
+                    - type: file
+                      path: /var/log/httpd/access_log
+                      source: apache
+                      sourcecategory: http_web_access
+                      service: myservice
+                      tags:
+                        - env:qa
+                    - type: file
+                      path: /var/log/httpd/error_log
+                      source: apache
+                      sourcecategory: http_web_access
+                      service: myservice
+                      tags:
+                        - env:qa
+                  EOT
+        restart:
+          commands:
+            01_restart:
+              command: "systemctl restart httpd.service; systemctl stop datadog-agent.service; systemctl start datadog-agent.service"
+    Properties:
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          yum update -y aws-cfn-bootstrap
+          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource MyWebServerInstance --configsets Install,Configure,Restart --region ${AWS::Region}
+      InstanceType: !Ref "InstaceTypeParam"
+      ImageId: !FindInMap
+        - EC2RegionMapping 
+        - !Ref AWS::Region 
+        - AMIs
+      SecurityGroups:
+      - Ref: MySecurityGroup
+  MySecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Allow web traffic"
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        FromPort: '80'
+        IpProtocol: tcp
+        ToPort: '80'
+Outputs:
+  URL:
+    Description: "The URL of this instance's website"
+    Value: !Sub "http://${MyWebServerInstance.PublicIp}"
+  InstanceDashboard:
+    Description: "Link to this instances's Datadog dashboard"
+    Value: !Sub "https://app.datadoghq.com/dash/host_name/${MyWebServerInstance}"
